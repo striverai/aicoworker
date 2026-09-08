@@ -11,6 +11,12 @@ log() {
   printf '[deploy-ai-globalpharma] %s\n' "$*"
 }
 
+sanitize_provision_output() {
+  sed -u -E \
+    -e 's#(AICW-PROVISION: SHARE_URL=).*#\1[masked]#' \
+    -e 's#(AICW-PROVISION: PASSWORD=).*#\1[masked]#'
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     echo "This deploy script must run as root on the VPS." >&2
@@ -21,7 +27,7 @@ require_root() {
 install_aicoworker() {
   log "Installing/upgrading AICoworker from ${INSTALLER_URL}"
   export AICOWORKER_HEALTH_TIMEOUT_SECONDS
-  curl -fsSL "${INSTALLER_URL}" | bash
+  curl -fsSL "${INSTALLER_URL}" | bash 2>&1 | sanitize_provision_output
 }
 
 wait_for_local_health() {
@@ -121,8 +127,7 @@ main() {
   configure_caddy
   verify_domain
 
-  log "AICoworker provision lines"
-  journalctl -u aicoworker --no-pager | grep 'AICW-PROVISION:' | tail -20 || true
+  log "Provision details remain on the VPS journal and are not printed in CI logs."
 }
 
 main "$@"
