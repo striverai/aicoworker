@@ -50,6 +50,36 @@ fix_cli_request_dir() {
   log "Updated CLI remote request path to the active AICoworker state directory"
 }
 
+fix_state_ownership() {
+  if ! id aicoworker >/dev/null 2>&1 || [[ ! -d /var/lib/aicoworker ]]; then
+    return 0
+  fi
+
+  local changed=0
+  local path owner_group
+
+  for path in \
+    /var/lib/aicoworker \
+    /var/lib/aicoworker/AICoworker \
+    /var/lib/aicoworker/aicoworker; do
+    if [[ ! -e "${path}" ]]; then
+      continue
+    fi
+
+    owner_group="$(stat -c '%U:%G' "${path}")"
+    if [[ "${owner_group}" != "aicoworker:aicoworker" ]]; then
+      chown -R aicoworker:aicoworker "${path}"
+      changed=1
+      log "Corrected ownership for ${path}"
+    fi
+  done
+
+  if [[ "${changed}" == "1" ]] && systemctl list-unit-files aicoworker.service >/dev/null 2>&1; then
+    systemctl restart aicoworker || true
+    log "Restarted AICoworker after correcting state ownership"
+  fi
+}
+
 wait_for_local_health() {
   log "Waiting for AICoworker local health on 127.0.0.1:${AICOWORKER_PORT}"
   for _ in $(seq 1 "${AICOWORKER_HEALTH_TIMEOUT_SECONDS}"); do
@@ -144,6 +174,7 @@ main() {
     install_aicoworker
   fi
   fix_cli_request_dir
+  fix_state_ownership
   wait_for_local_health
   configure_caddy
   verify_domain
