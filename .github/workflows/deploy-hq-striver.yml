@@ -1,0 +1,69 @@
+name: Deploy AICoworker to hq.striver.ai.vn
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-hq-striver.yml
+      - deployment/deploy-hq-striver.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-hq-striver
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOMAIN: hq.striver.ai.vn
+      VPS_HOST: ${{ secrets.AICOWORKER_HQ_VPS_HOST }}
+      VPS_USER: ${{ secrets.AICOWORKER_HQ_VPS_USER }}
+      VPS_PASSWORD: ${{ secrets.AICOWORKER_HQ_VPS_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${VPS_HOST}" || { echo "Missing AICOWORKER_HQ_VPS_HOST"; exit 1; }
+          test -n "${VPS_USER}" || { echo "Missing AICOWORKER_HQ_VPS_USER"; exit 1; }
+          test -n "${VPS_PASSWORD}" || { echo "Missing AICOWORKER_HQ_VPS_PASSWORD"; exit 1; }
+
+      - name: Install SSH tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Trust VPS host key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Upload deploy script
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSHPASS="${VPS_PASSWORD}" sshpass -e scp \
+            deployment/deploy-hq-striver.sh \
+            "${VPS_USER}@${VPS_HOST}:/tmp/deploy-hq-striver.sh"
+
+      - name: Run deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSHPASS="${VPS_PASSWORD}" sshpass -e ssh "${VPS_USER}@${VPS_HOST}" \
+            "DOMAIN='${DOMAIN}' bash /tmp/deploy-hq-striver.sh"
