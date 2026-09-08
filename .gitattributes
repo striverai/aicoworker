@@ -1,0 +1,3 @@
+.github/workflows/*.yml text eol=lf
+deployment/*.sh text eol=lf
+deployment/*.py text eol=lf

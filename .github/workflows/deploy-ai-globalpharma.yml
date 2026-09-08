@@ -1,0 +1,69 @@
+name: Deploy AICoworker to ai.globalpharma.vn
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-ai-globalpharma.yml
+      - deployment/deploy-ai-globalpharma.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-ai-globalpharma
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOMAIN: ai.globalpharma.vn
+      VPS_HOST: ${{ secrets.AICOWORKER_VPS_HOST }}
+      VPS_USER: ${{ secrets.AICOWORKER_VPS_USER }}
+      VPS_PASSWORD: ${{ secrets.AICOWORKER_VPS_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${VPS_HOST}" || { echo "Missing AICOWORKER_VPS_HOST"; exit 1; }
+          test -n "${VPS_USER}" || { echo "Missing AICOWORKER_VPS_USER"; exit 1; }
+          test -n "${VPS_PASSWORD}" || { echo "Missing AICOWORKER_VPS_PASSWORD"; exit 1; }
+
+      - name: Install SSH tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Trust VPS host key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Upload deploy script
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSHPASS="${VPS_PASSWORD}" sshpass -e scp \
+            deployment/deploy-ai-globalpharma.sh \
+            "${VPS_USER}@${VPS_HOST}:/tmp/deploy-ai-globalpharma.sh"
+
+      - name: Run deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSHPASS="${VPS_PASSWORD}" sshpass -e ssh "${VPS_USER}@${VPS_HOST}" \
+            "DOMAIN='${DOMAIN}' bash /tmp/deploy-ai-globalpharma.sh"
