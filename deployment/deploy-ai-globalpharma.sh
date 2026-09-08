@@ -80,6 +80,29 @@ fix_state_ownership() {
   fi
 }
 
+configure_local_llm_runtime() {
+  local dropin_dir="/etc/systemd/system/aicoworker.service.d"
+  local dropin_file="${dropin_dir}/20-local-llm.conf"
+  local tmp_file="${dropin_file}.tmp"
+
+  mkdir -p "${dropin_dir}"
+  if [[ -f "${dropin_file}" ]]; then
+    cp -a "${dropin_file}" "${dropin_file}.bak.$(date +%Y%m%d%H%M%S)"
+  fi
+
+  cat > "${tmp_file}" <<'EOF'
+[Service]
+Environment=AICOWORKER_LOCAL_LLM_KV_CACHE=0
+Environment=AICOWORKER_LOCAL_LLM_FORK=1
+EOF
+  mv -f "${tmp_file}" "${dropin_file}"
+  chmod 644 "${dropin_file}"
+
+  systemctl daemon-reload
+  systemctl restart aicoworker
+  log "Applied local LLM runtime override for AICoworker"
+}
+
 wait_for_local_health() {
   log "Waiting for AICoworker local health on 127.0.0.1:${AICOWORKER_PORT}"
   for _ in $(seq 1 "${AICOWORKER_HEALTH_TIMEOUT_SECONDS}"); do
@@ -175,6 +198,7 @@ main() {
   fi
   fix_cli_request_dir
   fix_state_ownership
+  configure_local_llm_runtime
   wait_for_local_health
   configure_caddy
   verify_domain
