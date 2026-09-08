@@ -30,6 +30,26 @@ install_aicoworker() {
   curl -fsSL "${INSTALLER_URL}" | bash 2>&1 | sanitize_provision_output
 }
 
+fix_cli_request_dir() {
+  local cli="/usr/local/bin/aicoworker"
+  local old='data_dir="/var/lib/aicoworker/AICoworker"'
+  local new='data_dir="/var/lib/aicoworker/aicoworker/app"'
+
+  if [[ ! -f "${cli}" ]] || ! grep -Fqx "${old}" "${cli}"; then
+    return 0
+  fi
+
+  if [[ ! -d /var/lib/aicoworker/aicoworker/app ]]; then
+    log "AICoworker app state directory is not present yet; leaving CLI request path unchanged"
+    return 0
+  fi
+
+  cp -a "${cli}" "${cli}.bak.$(date +%Y%m%d%H%M%S)"
+  sed -i "s#^${old}#${new}#" "${cli}"
+  chmod 755 "${cli}"
+  log "Updated CLI remote request path to the active AICoworker state directory"
+}
+
 wait_for_local_health() {
   log "Waiting for AICoworker local health on 127.0.0.1:${AICOWORKER_PORT}"
   for _ in $(seq 1 "${AICOWORKER_HEALTH_TIMEOUT_SECONDS}"); do
@@ -123,6 +143,7 @@ main() {
   else
     install_aicoworker
   fi
+  fix_cli_request_dir
   wait_for_local_health
   configure_caddy
   verify_domain
