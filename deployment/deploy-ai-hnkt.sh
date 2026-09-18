@@ -7,6 +7,7 @@ CADDY_CONTAINER="${CADDY_CONTAINER:-caddy}"
 CADDYFILE="${CADDYFILE:-/root/.caddy/Caddyfile}"
 AICOWORKER_PORT="${AICOWORKER_PORT:-23333}"
 INSTALLER_URL="${INSTALLER_URL:-https://aicoworker.net/install-headless.sh}"
+BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR:-/var/www/hnkt/ai-hnkt-branded}"
 
 log() {
   printf '[deploy-ai-hnkt] %s\n' "$*"
@@ -67,6 +68,130 @@ wait_for_local_health() {
   exit 1
 }
 
+configure_branding_overlay() {
+  log "Preparing HNKT AI frontend branding overlay"
+
+  install -d -m 755 "${BRANDING_OVERLAY_DIR}" "${BRANDING_OVERLAY_DIR}/assets"
+
+  BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR}" AICOWORKER_PORT="${AICOWORKER_PORT}" python3 - <<'PY'
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+from urllib.request import urlopen
+import os
+import re
+
+root = Path(os.environ["BRANDING_OVERLAY_DIR"])
+base = f"http://127.0.0.1:{os.environ['AICOWORKER_PORT']}/"
+
+def fetch(path: str) -> bytes:
+    with urlopen(urljoin(base, path), timeout=30) as response:
+        return response.read()
+
+html = fetch("/").decode("utf-8", "replace")
+refs = set(re.findall(r'''(?:src|href)=["']([^"']+)["']''', html))
+refs.add("./icon.svg")
+
+for ref in sorted(refs):
+    if ref.startswith(("data:", "http://", "https://", "#")):
+        continue
+    parsed = urlparse(urljoin(base, ref))
+    rel = parsed.path.lstrip("/") or "index.html"
+    dest = root / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.write_bytes(fetch(parsed.path))
+    except Exception as exc:
+        print(f"[deploy-ai-hnkt] Skipping optional frontend asset {ref}: {exc}")
+
+branding_script = r'''
+    <script id="hnkt-ai-branding">
+      (() => {
+        const brand = "HNKT AI";
+        const blockedCombined = ["Trang web GitHub", "GitHub Website", "Website GitHub"];
+        const blockedLinkLabels = new Set(["GitHub"]);
+        const skipTags = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "INPUT"]);
+
+        const replaceBrandText = (root) => {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+              const parent = node.parentElement;
+              if (!parent || skipTags.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+              return node.nodeValue.includes("AICoworker") || node.nodeValue.includes("AI Coworker")
+                ? NodeFilter.FILTER_ACCEPT
+                : NodeFilter.FILTER_REJECT;
+            }
+          });
+          const nodes = [];
+          while (walker.nextNode()) nodes.push(walker.currentNode);
+          for (const node of nodes) {
+            node.nodeValue = node.nodeValue
+              .replaceAll("AICoworker", brand)
+              .replaceAll("AI Coworker", brand);
+          }
+        };
+
+        const hideSettingLinks = () => {
+          for (const element of document.querySelectorAll("a,button,[role='button'],[role='menuitem']")) {
+            const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+            if (blockedLinkLabels.has(text) || blockedCombined.some((item) => text.includes(item))) {
+              element.style.setProperty("display", "none", "important");
+            }
+          }
+        };
+
+        let queued = false;
+        const run = () => {
+          if (queued) return;
+          queued = true;
+          requestAnimationFrame(() => {
+            queued = false;
+            document.title = brand;
+            replaceBrandText(document.body || document.documentElement);
+            hideSettingLinks();
+          });
+        };
+
+        document.addEventListener("DOMContentLoaded", run);
+        new MutationObserver(run).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+        run();
+      })();
+    </script>
+'''
+
+def brand_text(value: str) -> str:
+    value = value.replace("AICoworker", "HNKT AI")
+    value = value.replace("AI Coworker", "HNKT AI")
+    value = value.replace('docs:"Trang web",github:"GitHub"', 'docs:"",github:""')
+    value = value.replace('docs:"Website",github:"GitHub"', 'docs:"",github:""')
+    return value
+
+index = root / "index.html"
+html = brand_text(html)
+html = re.sub(r"<title>.*?</title>", "<title>HNKT AI</title>", html, flags=re.I | re.S)
+if 'id="hnkt-ai-branding"' not in html:
+    html = html.replace("</body>", branding_script + "\n  </body>")
+index.write_text(html, encoding="utf-8")
+
+for path in root.rglob("*"):
+    if not path.is_file() or path.suffix.lower() not in {".html", ".js", ".css", ".svg", ".json", ".webmanifest"}:
+        continue
+    try:
+        data = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        continue
+    patched = brand_text(data)
+    if patched != data:
+        path.write_text(patched, encoding="utf-8")
+PY
+
+  chmod -R a+rX "${BRANDING_OVERLAY_DIR}"
+  log "HNKT AI frontend overlay is ready at ${BRANDING_OVERLAY_DIR}"
+}
+
 detect_caddyfile() {
   local mounted_caddyfile=""
 
@@ -110,13 +235,14 @@ configure_caddy() {
   cp -a "${CADDYFILE}" "${backup}"
   log "Backed up Caddyfile to ${backup}"
 
-  DOMAIN="${DOMAIN}" AICOWORKER_PORT="${AICOWORKER_PORT}" CADDYFILE="${CADDYFILE}" python3 - <<'PY'
+  DOMAIN="${DOMAIN}" AICOWORKER_PORT="${AICOWORKER_PORT}" CADDYFILE="${CADDYFILE}" BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR}" python3 - <<'PY'
 from pathlib import Path
 import os
 import re
 
 domain = os.environ["DOMAIN"]
 port = os.environ["AICOWORKER_PORT"]
+overlay_dir = os.environ["BRANDING_OVERLAY_DIR"]
 p = Path(os.environ["CADDYFILE"])
 text = p.read_text()
 
@@ -125,6 +251,15 @@ end = f"# END AICoworker - {domain}"
 block = f"""# BEGIN AICoworker - {domain}
 {domain} {{
     encode zstd gzip
+    root * {overlay_dir}
+
+    @hnktFrontend {{
+        path / /index.html /assets/* /icon.svg /favicon* /manifest* /robots.txt
+    }}
+    handle @hnktFrontend {{
+        try_files {{path}} /index.html
+        file_server
+    }}
 
     reverse_proxy 127.0.0.1:{port} {{
         header_up Host {{host}}
@@ -183,6 +318,7 @@ main() {
   fi
   fix_cli_request_dir
   wait_for_local_health
+  configure_branding_overlay
   configure_caddy
   verify_domain
 
