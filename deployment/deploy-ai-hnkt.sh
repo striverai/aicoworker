@@ -8,6 +8,7 @@ CADDYFILE="${CADDYFILE:-/root/.caddy/Caddyfile}"
 AICOWORKER_PORT="${AICOWORKER_PORT:-23333}"
 INSTALLER_URL="${INSTALLER_URL:-https://aicoworker.net/install-headless.sh}"
 BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR:-/var/www/hnkt/ai-hnkt-branded}"
+BRANDING_CACHE_BUSTER="${BRANDING_CACHE_BUSTER:-hnkt-ai-branding-v2}"
 
 log() {
   printf '[deploy-ai-hnkt] %s\n' "$*"
@@ -73,7 +74,7 @@ configure_branding_overlay() {
 
   install -d -m 755 "${BRANDING_OVERLAY_DIR}" "${BRANDING_OVERLAY_DIR}/assets"
 
-  BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR}" AICOWORKER_PORT="${AICOWORKER_PORT}" python3 - <<'PY'
+  BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR}" AICOWORKER_PORT="${AICOWORKER_PORT}" BRANDING_CACHE_BUSTER="${BRANDING_CACHE_BUSTER}" python3 - <<'PY'
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from urllib.request import urlopen
@@ -82,6 +83,7 @@ import re
 
 root = Path(os.environ["BRANDING_OVERLAY_DIR"])
 base = f"http://127.0.0.1:{os.environ['AICOWORKER_PORT']}/"
+cache_buster = os.environ["BRANDING_CACHE_BUSTER"]
 
 def fetch(path: str) -> bytes:
     with urlopen(urljoin(base, path), timeout=30) as response:
@@ -109,14 +111,27 @@ branding_script = r'''
         const brand = "HNKT AI";
         const blockedCombined = ["Trang web GitHub", "GitHub Website", "Website GitHub"];
         const blockedLinkLabels = new Set(["GitHub"]);
+        const blockedHrefParts = ["aicoworker.net", "github.com"];
         const skipTags = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "INPUT"]);
+        const replacements = [
+          ["AICoworker", brand],
+          ["AI Coworker", brand],
+          ["agent.aicoworker.net", "HNKT AI relay"],
+          ["aicoworker.net", brand]
+        ];
+
+        const replaceVisibleValue = (value) => {
+          let next = value;
+          for (const [from, to] of replacements) next = next.replaceAll(from, to);
+          return next;
+        };
 
         const replaceBrandText = (root) => {
           const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
             acceptNode(node) {
               const parent = node.parentElement;
               if (!parent || skipTags.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
-              return node.nodeValue.includes("AICoworker") || node.nodeValue.includes("AI Coworker")
+              return replacements.some(([from]) => node.nodeValue.includes(from))
                 ? NodeFilter.FILTER_ACCEPT
                 : NodeFilter.FILTER_REJECT;
             }
@@ -124,16 +139,32 @@ branding_script = r'''
           const nodes = [];
           while (walker.nextNode()) nodes.push(walker.currentNode);
           for (const node of nodes) {
-            node.nodeValue = node.nodeValue
-              .replaceAll("AICoworker", brand)
-              .replaceAll("AI Coworker", brand);
+            node.nodeValue = replaceVisibleValue(node.nodeValue);
+          }
+
+          for (const element of document.querySelectorAll("[placeholder],[title],[aria-label]")) {
+            for (const attr of ["placeholder", "title", "aria-label"]) {
+              const value = element.getAttribute(attr);
+              if (value && replacements.some(([from]) => value.includes(from))) {
+                element.setAttribute(attr, replaceVisibleValue(value));
+              }
+            }
           }
         };
 
         const hideSettingLinks = () => {
           for (const element of document.querySelectorAll("a,button,[role='button'],[role='menuitem']")) {
             const text = (element.textContent || "").replace(/\s+/g, " ").trim();
-            if (blockedLinkLabels.has(text) || blockedCombined.some((item) => text.includes(item))) {
+            const href = [
+              element.getAttribute("href"),
+              element.getAttribute("data-href"),
+              element.getAttribute("data-url")
+            ].filter(Boolean).join(" ");
+            if (
+              blockedHrefParts.some((item) => href.includes(item)) ||
+              blockedCombined.some((item) => text.includes(item)) ||
+              (blockedLinkLabels.has(text) && href)
+            ) {
               element.style.setProperty("display", "none", "important");
             }
           }
@@ -165,13 +196,22 @@ branding_script = r'''
 def brand_text(value: str) -> str:
     value = value.replace("AICoworker", "HNKT AI")
     value = value.replace("AI Coworker", "HNKT AI")
+    value = value.replace("https://aicoworker.net", "#")
+    value = value.replace("http://aicoworker.net", "#")
     value = value.replace('docs:"Trang web",github:"GitHub"', 'docs:"",github:""')
     value = value.replace('docs:"Website",github:"GitHub"', 'docs:"",github:""')
+    value = value.replace('docs:"Trang web"', 'docs:""')
+    value = value.replace('docs:"Website"', 'docs:""')
     return value
 
 index = root / "index.html"
 html = brand_text(html)
 html = re.sub(r"<title>.*?</title>", "<title>HNKT AI</title>", html, flags=re.I | re.S)
+html = re.sub(
+    r'''((?:src|href)=["'](?:\./)?(?:assets/[^"']+|icon\.svg))(?:\?[^"']*)?(["'])''',
+    rf"\1?{cache_buster}\2",
+    html,
+)
 if 'id="hnkt-ai-branding"' not in html:
     html = html.replace("</body>", branding_script + "\n  </body>")
 index.write_text(html, encoding="utf-8")
