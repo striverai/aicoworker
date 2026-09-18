@@ -8,7 +8,7 @@ CADDYFILE="${CADDYFILE:-/root/.caddy/Caddyfile}"
 AICOWORKER_PORT="${AICOWORKER_PORT:-23333}"
 INSTALLER_URL="${INSTALLER_URL:-https://aicoworker.net/install-headless.sh}"
 BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR:-/var/www/hnkt/ai-hnkt-branded}"
-BRANDING_CACHE_BUSTER="${BRANDING_CACHE_BUSTER:-hnkt-ai-branding-v3}"
+BRANDING_CACHE_BUSTER="${BRANDING_CACHE_BUSTER:-hnkt-ai-branding-v4}"
 
 log() {
   printf '[deploy-ai-hnkt] %s\n' "$*"
@@ -109,8 +109,9 @@ branding_script = r'''
     <script id="hnkt-ai-branding">
       (() => {
         const brand = "HNKT AI";
-        const blockedCombined = ["Trang web GitHub", "GitHub Website", "Website GitHub"];
+        const blockedCombined = ["Trang web GitHub", "Trang web và GitHub", "GitHub Website", "Website GitHub"];
         const blockedLinkLabels = new Set(["GitHub"]);
+        const blockedPairedLabels = new Set(["Trang web", "Website", "ウェブサイト", "网站"]);
         const legacyName = "AI" + "Coworker";
         const legacySpacedName = "AI " + "Coworker";
         const legacyDomain = "aicoworker" + ".net";
@@ -163,10 +164,20 @@ branding_script = r'''
               element.getAttribute("data-href"),
               element.getAttribute("data-url")
             ].filter(Boolean).join(" ");
+            const hasNearbyGitHub = (() => {
+              let node = element.parentElement;
+              for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+                const nodeText = (node.textContent || "").replace(/\s+/g, " ").trim();
+                const actionCount = node.querySelectorAll("a,button,[role='button'],[role='menuitem']").length;
+                if (nodeText.includes("GitHub") && actionCount > 0 && actionCount <= 6) return true;
+              }
+              return false;
+            })();
             if (
               blockedHrefParts.some((item) => href.includes(item)) ||
               blockedCombined.some((item) => text.includes(item)) ||
-              (blockedLinkLabels.has(text) && href)
+              blockedLinkLabels.has(text) ||
+              (blockedPairedLabels.has(text) && hasNearbyGitHub)
             ) {
               element.style.setProperty("display", "none", "important");
             }
@@ -203,8 +214,8 @@ def brand_text(value: str) -> str:
     value = value.replace("http://aicoworker.net", "#")
     value = value.replace('docs:"Trang web",github:"GitHub"', 'docs:"",github:""')
     value = value.replace('docs:"Website",github:"GitHub"', 'docs:"",github:""')
-    value = value.replace('docs:"Trang web"', 'docs:""')
-    value = value.replace('docs:"Website"', 'docs:""')
+    value = re.sub(r'docs:"(?:Trang web|Website|ウェブサイト|网站)"', 'docs:""', value)
+    value = value.replace('github:"GitHub"', 'github:""')
     return value
 
 index = root / "index.html"
