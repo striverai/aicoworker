@@ -8,7 +8,7 @@ CADDYFILE="${CADDYFILE:-/root/.caddy/Caddyfile}"
 AICOWORKER_PORT="${AICOWORKER_PORT:-23333}"
 INSTALLER_URL="${INSTALLER_URL:-https://aicoworker.net/install-headless.sh}"
 BRANDING_OVERLAY_DIR="${BRANDING_OVERLAY_DIR:-/var/www/hnkt/ai-hnkt-branded}"
-BRANDING_CACHE_BUSTER="${BRANDING_CACHE_BUSTER:-hnkt-ai-branding-v2}"
+BRANDING_CACHE_BUSTER="${BRANDING_CACHE_BUSTER:-hnkt-ai-branding-v3}"
 
 log() {
   printf '[deploy-ai-hnkt] %s\n' "$*"
@@ -111,13 +111,16 @@ branding_script = r'''
         const brand = "HNKT AI";
         const blockedCombined = ["Trang web GitHub", "GitHub Website", "Website GitHub"];
         const blockedLinkLabels = new Set(["GitHub"]);
-        const blockedHrefParts = ["aicoworker.net", "github.com"];
+        const legacyName = "AI" + "Coworker";
+        const legacySpacedName = "AI " + "Coworker";
+        const legacyDomain = "aicoworker" + ".net";
+        const blockedHrefParts = [legacyDomain, "github.com"];
         const skipTags = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "INPUT"]);
         const replacements = [
-          ["AICoworker", brand],
-          ["AI Coworker", brand],
-          ["agent.aicoworker.net", "HNKT AI relay"],
-          ["aicoworker.net", brand]
+          [legacyName, brand],
+          [legacySpacedName, brand],
+          ["agent." + legacyDomain, "HNKT AI relay"],
+          [legacyDomain, brand]
         ];
 
         const replaceVisibleValue = (value) => {
@@ -208,7 +211,7 @@ index = root / "index.html"
 html = brand_text(html)
 html = re.sub(r"<title>.*?</title>", "<title>HNKT AI</title>", html, flags=re.I | re.S)
 html = re.sub(
-    r'''((?:src|href)=["'](?:\./)?(?:assets/[^"']+|icon\.svg))(?:\?[^"']*)?(["'])''',
+    r'''((?:src|href)=["'](?:\./)?(?:assets/[^"']+|__remote/shim\.js|icon\.svg))(?:\?[^"']*)?(["'])''',
     rf"\1?{cache_buster}\2",
     html,
 )
@@ -294,7 +297,7 @@ block = f"""# BEGIN AICoworker - {domain}
     root * {overlay_dir}
 
     @hnktFrontend {{
-        path / /index.html /assets/* /icon.svg /favicon* /manifest* /robots.txt
+        path / /index.html /assets/* /__remote/shim.js /icon.svg /favicon* /manifest* /robots.txt
     }}
     handle @hnktFrontend {{
         try_files {{path}} /index.html
